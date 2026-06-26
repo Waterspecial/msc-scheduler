@@ -1,0 +1,22 @@
+# Credentials — never commit
+.env
+
+# AI instruction file — never commit
+CLAUDE.md
+
+# Dependencies
+node_modules/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Build output
+dist/
+build/
+
+# OS
+.DS_Store
