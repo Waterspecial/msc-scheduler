@@ -12,6 +12,8 @@ import json
 import time
 from datetime import datetime
 
+import fairness
+
 # ---------------------------------------------------------------------------
 # Time helpers
 # ---------------------------------------------------------------------------
@@ -81,22 +83,6 @@ def hc5_min_rest(worker_assigned, shift, shifts_map, min_rest_minutes):
     return True
 
 # ---------------------------------------------------------------------------
-# Metrics
-# ---------------------------------------------------------------------------
-
-def gini(values):
-    """Gini coefficient of a list of non-negative numbers."""
-    vals = sorted(v for v in values if v > 0)
-    n = len(vals)
-    if n == 0:
-        return 0.0
-    total = sum(vals)
-    if total == 0:
-        return 0.0
-    numerator = sum((2 * (i + 1) - n - 1) * v for i, v in enumerate(vals))
-    return numerator / (n * total)
-
-# ---------------------------------------------------------------------------
 # Main algorithm
 # ---------------------------------------------------------------------------
 
@@ -155,16 +141,18 @@ def run(data):
 
     computation_ms    = round((time.time() - t0) * 1000, 2)
     completeness      = round(filled_slots / total_slots * 100, 1) if total_slots else 0.0
-    gini_coefficient  = round(gini(list(hours_assigned.values())), 4)
+
+    fair = fairness.evaluate(workers, shifts, assignments, data.get('fairness_weights'))
 
     return {
         'assignments': assignments,
         'unfilled':    unfilled,
         'metrics': {
             'constraint_satisfaction': 100.0,
-            'gini':           gini_coefficient,
+            'gini':           fair['sc1_hours']['gini'],   # kept for backward compat
             'completeness':   completeness,
             'computation_ms': computation_ms,
+            'fairness':       fair,
         }
     }
 

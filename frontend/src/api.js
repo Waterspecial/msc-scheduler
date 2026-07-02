@@ -1,28 +1,39 @@
-const BASE = '';
+const BASE = '/api';
 
 function getToken() {
   return localStorage.getItem('token');
 }
 
-function authHeaders() {
-  return {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${getToken()}`
-  };
+function authHeaders(hasBody = false) {
+  const headers = { 'Authorization': `Bearer ${getToken()}` };
+  if (hasBody) headers['Content-Type'] = 'application/json';
+  return headers;
 }
 
 async function request(method, path, body) {
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers: authHeaders(),
-    body: body ? JSON.stringify(body) : undefined
-  });
-  const data = await res.json();
+  let res;
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      method,
+      headers: authHeaders(!!body),
+      body: body ? JSON.stringify(body) : undefined
+    });
+  } catch {
+    throw new Error('Cannot reach server. Is the backend running on port 3001?');
+  }
+
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    throw new Error(`Server returned non-JSON response (status ${res.status})`);
+  }
+
   if (res.status === 401) {
     localStorage.removeItem('token');
     localStorage.removeItem('agencyName');
     window.location.href = '/login';
-    return;
+    throw new Error('Session expired. Please log in again.');
   }
   if (!res.ok) throw new Error(data.error || 'Request failed');
   return data;

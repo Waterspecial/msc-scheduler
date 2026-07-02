@@ -7,8 +7,8 @@ async function generateSchedule(req, res) {
   const { schemaName } = req.agency;
   const { algorithm }  = req.body;
 
-  if (!['greedy', 'cpsat'].includes(algorithm)) {
-    return res.status(400).json({ error: 'algorithm must be "greedy" or "cpsat"' });
+  if (!['greedy', 'cpsat', 'llm'].includes(algorithm)) {
+    return res.status(400).json({ error: 'algorithm must be "greedy", "cpsat" or "llm"' });
   }
 
   try {
