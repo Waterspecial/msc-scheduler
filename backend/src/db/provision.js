@@ -54,7 +54,7 @@ async function provisionAgencySchema(schemaName) {
       CREATE TABLE IF NOT EXISTS "${schemaName}".schedules (
         id             SERIAL PRIMARY KEY,
         created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        algorithm_used TEXT        NOT NULL CHECK (algorithm_used IN ('greedy','cpsat'))
+        algorithm_used TEXT        NOT NULL CHECK (algorithm_used IN ('greedy','cpsat','llm'))
       )
     `);
 

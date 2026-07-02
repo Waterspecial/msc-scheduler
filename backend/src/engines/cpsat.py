@@ -17,6 +17,8 @@ import time
 from datetime import datetime
 from ortools.sat.python import cp_model
 
+import fairness
+
 # ---------------------------------------------------------------------------
 # Time helpers  (same as greedy.py — keeps the comparison controlled)
 # ---------------------------------------------------------------------------
@@ -35,9 +37,6 @@ def day_of_week(date_str):
 def shift_duration_minutes(shift):
     """Returns how long a shift is in minutes."""
     return parse_time(shift['end']) - parse_time(shift['start'])
-
-def shift_duration_hours(shift):
-    return shift_duration_minutes(shift) / 60.0
 
 # ---------------------------------------------------------------------------
 # Eligibility check
@@ -65,22 +64,6 @@ def is_eligible(worker, shift, min_rest):
         return False
 
     return True
-
-# ---------------------------------------------------------------------------
-# Gini coefficient  (same formula as greedy.py)
-# Measures fairness: 0 = perfectly equal hours, 1 = completely unequal
-# ---------------------------------------------------------------------------
-
-def gini(values):
-    vals = sorted(v for v in values if v > 0)
-    n = len(vals)
-    if n == 0:
-        return 0.0
-    total = sum(vals)
-    if total == 0:
-        return 0.0
-    numerator = sum((2 * (i + 1) - n - 1) * v for i, v in enumerate(vals))
-    return numerator / (n * total)
 
 # ---------------------------------------------------------------------------
 # Main algorithm
@@ -288,15 +271,8 @@ def run(data, time_limit_seconds=30):
                 'slots_filled': filled
             })
 
-    # Compute Gini on actual hours assigned
-    hours_assigned = {w['id']: 0.0 for w in workers}
-    for a in assignments:
-        shift = next(s for s in shifts if s['id'] == a['shift_id'])
-        hours_assigned[a['worker_id']] += shift_duration_hours(shift)
-
     computation_ms   = round((time.time() - t0) * 1000, 2)
     completeness     = round(filled_slots_count / total_slots * 100, 1) if total_slots else 0.0
-    gini_coefficient = round(gini(list(hours_assigned.values())), 4)
 
     solver_status_name = {
         cp_model.OPTIMAL:   'OPTIMAL',
@@ -305,15 +281,18 @@ def run(data, time_limit_seconds=30):
         cp_model.UNKNOWN:   'UNKNOWN',
     }.get(status, 'UNKNOWN')
 
+    fair = fairness.evaluate(workers, shifts, assignments, data.get('fairness_weights'))
+
     return {
         'assignments': assignments,
         'unfilled':    unfilled,
         'metrics': {
             'constraint_satisfaction': 100.0 if status in (cp_model.OPTIMAL, cp_model.FEASIBLE) else 0.0,
-            'gini':            gini_coefficient,
+            'gini':            fair['sc1_hours']['gini'],   # kept for backward compat
             'completeness':    completeness,
             'computation_ms':  computation_ms,
             'solver_status':   solver_status_name,
+            'fairness':        fair,
         }
     }
 

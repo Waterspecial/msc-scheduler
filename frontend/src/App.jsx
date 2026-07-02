@@ -55,9 +55,18 @@ function Sidebar() {
 }
 
 function PrivateRoute({ children }) {
-  return localStorage.getItem('token')
-    ? <div className="app-shell"><Sidebar /><main className="app-main">{children}</main></div>
-    : <Navigate to="/login" />;
+  const token = localStorage.getItem('token');
+  if (!token || token === 'null' || token === 'undefined') {
+    localStorage.removeItem('token');
+    localStorage.removeItem('agencyName');
+    return <Navigate to="/login" replace />;
+  }
+  return (
+    <div className="app-shell">
+      <Sidebar />
+      <main className="app-main">{children}</main>
+    </div>
+  );
 }
 
 export default function App() {

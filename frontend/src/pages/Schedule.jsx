@@ -1,10 +1,18 @@
 import React, { useState } from 'react';
 import { api } from '../api';
 
+// Turn a 0..1 fairness score into a plain word + colour class.
+function verdict(score) {
+  if (score >= 0.8)  return { word: 'fair',   cls: 'success' };
+  if (score >= 0.5)  return { word: 'uneven', cls: 'warning' };
+  return { word: 'poor', cls: 'error' };
+}
+
 export default function Schedule() {
   const [algorithm, setAlgorithm] = useState('greedy');
   const [result, setResult]       = useState(null);
-  const [metrics, setMetrics]     = useState(null);
+  const [details, setDetails]     = useState(null);
+  const [nameMap, setNameMap]     = useState({});
   const [loading, setLoading]     = useState(false);
   const [error, setError]         = useState('');
 
@@ -12,12 +20,16 @@ export default function Schedule() {
     setLoading(true);
     setError('');
     setResult(null);
-    setMetrics(null);
+    setDetails(null);
     try {
       const data = await api.generateSchedule(algorithm);
       setResult(data);
-      const m = await api.getMetrics(data.schedule_id);
-      setMetrics(m);
+      const [full, workers] = await Promise.all([
+        api.getSchedule(data.schedule_id),
+        api.getWorkers(),   // names for the per-worker table (incl. left-out workers)
+      ]);
+      setDetails(full.assignments);
+      setNameMap(Object.fromEntries(workers.map(w => [w.id, w.name])));
     } catch (e) {
       setError(e.message);
     } finally {
@@ -25,12 +37,16 @@ export default function Schedule() {
     }
   }
 
+  const m    = result?.metrics;
+  const fair = m?.fairness;
+  const hardOk = m?.constraint_satisfaction === 100;
+
   return (
     <>
       <div className="page-header">
         <div className="page-header-left">
           <h1>Schedule</h1>
-          <p>Generate and compare algorithm outputs</p>
+          <p>Generate a schedule and see how fair it is</p>
         </div>
         <div className="page-header-actions">
           <select
@@ -40,6 +56,7 @@ export default function Schedule() {
           >
             <option value="greedy">Greedy</option>
             <option value="cpsat">CP-SAT</option>
+            <option value="llm">LLM (GPT-4o)</option>
           </select>
           <button className="btn btn-primary btn-sm" onClick={handleGenerate} disabled={loading}>
             {loading ? 'Generating…' : 'Generate Schedule'}
@@ -50,63 +67,113 @@ export default function Schedule() {
       <div className="page-body">
         {error && <div className="alert alert-error">{error}</div>}
 
-        {metrics && (
+        {result && fair && (
           <>
+            {/* ── Plain-English summary ─────────────────────────────── */}
             <div className="stat-grid">
+              <div className={`stat-card ${verdict(fair.fairness_score).cls}`}>
+                <div className="label">Fairness Score</div>
+                <div className="value">{fair.fairness_score.toFixed(2)}</div>
+                <div className="sub">out of 1.00 — higher is fairer</div>
+              </div>
               <div className="stat-card primary">
-                <div className="label">Completeness</div>
-                <div className="value">{metrics.completeness}%</div>
-                <div className="sub">{metrics.filled_slots} of {metrics.total_slots} slots filled</div>
+                <div className="label">Slots filled</div>
+                <div className="value">{m.completeness}%</div>
+                <div className="sub">shift slots covered</div>
               </div>
-              <div className="stat-card success">
-                <div className="label">Gini fairness coefficient</div>
-                <div className="value">{metrics.gini_fairness}</div>
-                <div className="sub">0 = perfectly fair distribution</div>
+              <div className={`stat-card ${hardOk ? 'success' : 'error'}`}>
+                <div className="label">Hard rules</div>
+                <div className="value" style={{ fontSize: 22, paddingTop: 4 }}>
+                  {hardOk ? '✅ All met' : '❌ Broken'}
+                </div>
+                <div className="sub">HC1–HC5 (availability, rest, etc.)</div>
               </div>
-              <div className={`stat-card ${metrics.completeness === 100 ? 'success' : 'warning'}`}>
-                <div className="label">Algorithm</div>
-                <div className="value" style={{ fontSize: 22, paddingTop: 4 }}>{metrics.algorithm.toUpperCase()}</div>
-                <div className="sub">Schedule #{metrics.schedule_id}</div>
+              <div className="stat-card">
+                <div className="label">Engine</div>
+                <div className="value" style={{ fontSize: 22, paddingTop: 4 }}>{result.algorithm.toUpperCase()}</div>
+                <div className="sub">{m.computation_ms} ms · schedule #{result.schedule_id}</div>
               </div>
             </div>
 
-            {result?.metrics && (
-              <div className="metrics-engine-info">
-                Engine · Computation: {result.metrics.computation_ms}ms &nbsp;|&nbsp;
-                Constraint satisfaction: {result.metrics.constraint_satisfaction}% &nbsp;|&nbsp;
-                Gini: {result.metrics.gini} &nbsp;|&nbsp;
-                Completeness: {result.metrics.completeness}%
-              </div>
-            )}
-          </>
-        )}
-
-        {result && (
-          <>
-            {result.unfilled?.length > 0 && (
-              <div className="alert alert-error">
-                Unfilled shift slots: {result.unfilled.join(', ')}
-              </div>
-            )}
-
+            {/* ── Why that score: the 3 measured things ─────────────── */}
+            <h3 style={{ margin: '24px 0 8px' }}>Why this score — the three things we measure</h3>
             <div className="assignments-wrap">
               <table>
                 <thead>
-                  <tr>
-                    <th>Shift ID</th>
-                    <th>Worker ID</th>
-                  </tr>
+                  <tr><th>Fairness measure</th><th>What it checks</th><th>Score</th><th>Verdict</th></tr>
                 </thead>
                 <tbody>
-                  {result.assignments.length === 0 && (
-                    <tr><td colSpan="2" style={{ textAlign: 'center', color: 'var(--faint)', padding: 32 }}>
+                  <tr>
+                    <td><strong>Even hours</strong> (SC1)</td>
+                    <td>Are total hours spread evenly across workers?</td>
+                    <td>{fair.sc1_hours.score.toFixed(2)}</td>
+                    <td><span className={`alert alert-${verdict(fair.sc1_hours.score).cls}`} style={{ padding: '2px 8px' }}>{verdict(fair.sc1_hours.score).word}</span></td>
+                  </tr>
+                  <tr>
+                    <td><strong>Shared bad shifts</strong> (SC2)</td>
+                    <td>Are weekend/night shifts shared, not dumped on one person?</td>
+                    <td>{fair.sc2_unsociable.score.toFixed(2)}</td>
+                    <td><span className={`alert alert-${verdict(fair.sc2_unsociable.score).cls}`} style={{ padding: '2px 8px' }}>{verdict(fair.sc2_unsociable.score).word}</span></td>
+                  </tr>
+                  <tr>
+                    <td><strong>Nobody left out</strong> (SC3)</td>
+                    <td>Did everyone who can work get some hours? ({fair.sc3_left_out.served}/{fair.sc3_left_out.pool} got work)</td>
+                    <td>{fair.sc3_left_out.score.toFixed(2)}</td>
+                    <td><span className={`alert alert-${verdict(fair.sc3_left_out.score).cls}`} style={{ padding: '2px 8px' }}>{verdict(fair.sc3_left_out.score).word}</span></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* ── Per-worker breakdown: makes fairness visible ──────── */}
+            <h3 style={{ margin: '24px 0 8px' }}>Per-worker breakdown</h3>
+            <div className="assignments-wrap">
+              <table>
+                <thead>
+                  <tr><th>Worker</th><th>Role</th><th>Hours</th><th>Weekend shifts</th><th>Night shifts</th></tr>
+                </thead>
+                <tbody>
+                  {[...fair.per_worker].sort((a, b) => b.hours - a.hours).map(w => (
+                    <tr key={w.worker_id} style={w.hours === 0 ? { background: 'var(--warning-bg, #fff7ed)' } : undefined}>
+                      <td>{nameMap[w.worker_id] || `Worker #${w.worker_id}`}</td>
+                      <td>{w.role}</td>
+                      <td>{w.hours}{w.hours === 0 && <span style={{ color: 'var(--faint)' }}> ⚠️ left out</span>}</td>
+                      <td>{w.weekend_shifts}</td>
+                      <td>{w.night_shifts}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* ── Unfilled + the actual assignments ─────────────────── */}
+            {result.unfilled?.length > 0 && (
+              <div className="alert alert-error" style={{ marginTop: 24 }}>
+                Unfilled shift slots: {result.unfilled
+                  .map(u => `#${u.shift_id} (${u.slots_filled}/${u.slots_needed} filled)`)
+                  .join(', ')}
+              </div>
+            )}
+
+            <h3 style={{ margin: '24px 0 8px' }}>Assignments</h3>
+            <div className="assignments-wrap">
+              <table>
+                <thead>
+                  <tr><th>Shift</th><th>Date</th><th>Time</th><th>Role</th><th>Worker</th></tr>
+                </thead>
+                <tbody>
+                  {(!details || details.length === 0) && (
+                    <tr><td colSpan="5" style={{ textAlign: 'center', color: 'var(--faint)', padding: 32 }}>
                       No assignments generated
                     </td></tr>
                   )}
-                  {result.assignments.map((a, i) => (
-                    <tr key={i}>
-                      <td style={{ fontFamily: 'monospace' }}>#{a.shift_id}</td>
-                      <td style={{ fontFamily: 'monospace' }}>#{a.worker_id}</td>
+                  {details && details.map(a => (
+                    <tr key={a.id}>
+                      <td>{a.title || `Shift #${a.shift_id}`}</td>
+                      <td>{a.shift_date}</td>
+                      <td>{a.start_time}–{a.end_time}</td>
+                      <td>{a.required_role}</td>
+                      <td>{a.worker_name} <span style={{ color: 'var(--faint)' }}>({a.worker_role})</span></td>
                     </tr>
                   ))}
                 </tbody>
